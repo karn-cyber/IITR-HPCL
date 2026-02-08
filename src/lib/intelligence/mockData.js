@@ -22,28 +22,34 @@ const PRODUCT_CODES = ["HSD", "LDO", "FO", "BITUMEN", "BUNKER", "HEXANE", "PROPY
 export function generateMockLeads(count = 200) {
     const leads = [];
     for (let i = 0; i < count; i++) {
-        const company = COMPANY_NAMES[Math.floor(Math.random() * COMPANY_NAMES.length)];
-        const industry = INDUSTRIES[Math.floor(Math.random() * INDUSTRIES.length)];
-        const productCode = PRODUCT_CODES[Math.floor(Math.random() * PRODUCT_CODES.length)];
+        // Use index i to make selections predictable based on index
+        // This ensures LEAD-1000 is always the same "Reliance" entry, etc.
+        const companyIndex = i % COMPANY_NAMES.length;
+        const industryIndex = (i + 2) % INDUSTRIES.length;
+        const productIndex = (i + 5) % PRODUCT_CODES.length;
+        const locationIndex = (i + 3) % 7;
+        const typeChoiceIndex = (i * 7) % 10; // Values 0-9
 
-        // Randomize score components
-        const typeChoice = Math.random();
+        const company = COMPANY_NAMES[companyIndex];
+        const industry = INDUSTRIES[industryIndex];
+        const productCode = PRODUCT_CODES[productIndex];
+
         let signalType = 'NEWS';
-        if (typeChoice > 0.8) signalType = 'TENDER';
-        else if (typeChoice > 0.6) signalType = 'WEB_STORY';
+        if (typeChoiceIndex > 7) signalType = 'TENDER';
+        else if (typeChoiceIndex > 4) signalType = 'WEB_STORY';
 
-        const hasCapacity = Math.random() > 0.5;
-        const hasHighConfidence = Math.random() > 0.3;
+        const hasCapacity = (i % 2) === 0;
+        const hasHighConfidence = (i % 3) !== 0;
 
         const properties = {};
         if (hasCapacity) properties.capacityMentioned = true;
-        if (Math.random() > 0.7) properties.urgencyIndicators = true;
-        if (Math.random() > 0.8) properties.existingHPCLCustomer = true;
+        if ((i % 5) === 0) properties.urgencyIndicators = true;
+        if ((i % 7) === 0) properties.existingHPCLCustomer = true;
 
         const baseSignal = {
-            text: `Detection for ${company} in ${industry} sector showing interest in ${productCode}`,
+            text: `Stable detection for ${company} in ${industry} sector showing interest in ${productCode}`,
             type: signalType,
-            hasVolume: Math.random() > 0.7,
+            hasVolume: (i % 4) === 0,
             hasCapacity: hasCapacity,
             hasHighConfidenceIndustry: hasHighConfidence,
             properties: properties
@@ -53,10 +59,11 @@ export function generateMockLeads(count = 200) {
 
         leads.push({
             id: `LEAD-${1000 + i}`,
-            timestamp: new Date(Date.now() - Math.floor(Math.random() * 1000000000)).toISOString(),
+            // Fixed timestamp based on ID to remain stable
+            timestamp: new Date(2026, i % 12, (i % 28) + 1).toISOString(),
             company,
             industry,
-            location: ["Mumbai", "Ahmedabad", "Pune", "Chennai", "Kolkata", "Delhi", "Visakhapatnam"][Math.floor(Math.random() * 7)],
+            location: ["Mumbai", "Ahmedabad", "Pune", "Chennai", "Kolkata", "Delhi", "Visakhapatnam"][locationIndex],
             primaryProduct: productCode,
             confidence: result.finalConfidence,
             reasonCodes: result.reasonCodes,
@@ -64,7 +71,19 @@ export function generateMockLeads(count = 200) {
             source: signalType === 'TENDER' ? 'GeM Portal' : (signalType === 'NEWS' ? 'Financial Express' : 'Company Website')
         });
     }
-    return leads.sort((a, b) => b.confidence - a.confidence);
+    // Return sorted but derived from stable base
+    return [...leads].sort((a, b) => b.confidence - a.confidence);
+}
+
+export function getLeadById(id) {
+    const numericId = parseInt(id.split('-')[1]);
+    const index = numericId - 1000;
+    if (isNaN(index) || index < 0) return null;
+
+    // We recreate the specific lead based on its index i
+    const leads = generateMockLeads(index + 1);
+    const lead = leads.find(l => l.id === id);
+    return lead;
 }
 
 import { calculateLeadConfidence } from './engine';

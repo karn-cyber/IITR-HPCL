@@ -2,7 +2,7 @@
 
 import { useParams, useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
-import { generateMockLeads } from '@/lib/intelligence/mockData';
+import { getLeadById } from '@/lib/intelligence/mockData';
 import Link from 'next/link';
 import {
     ArrowLeft,
@@ -25,8 +25,7 @@ export default function LeadDossier() {
     const [feedback, setFeedback] = useState(null);
 
     useEffect(() => {
-        const allLeads = generateMockLeads(250);
-        const foundLead = allLeads.find(l => l.id === id) || allLeads[0];
+        const foundLead = getLeadById(id);
         setLead(foundLead);
     }, [id]);
 
