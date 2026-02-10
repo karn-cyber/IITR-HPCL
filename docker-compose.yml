@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  scraper:
+    build:
+      context: ./Scraper
+      dockerfile: Dockerfile
+    image: hpcl-scraper
+    container_name: hpcl-scraper
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./Scraper:/app
+      - ./Scraper/data:/app/data
+    env_file:
+      - ./Scraper/.env
+    restart: unless-stopped
+    networks:
+      - hpcl-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: hpcl-frontend
+    container_name: hpcl-frontend
+    ports:
+      - "3000:3000"
+    env_file:
+      - ./frontend/.env
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      - scraper
+    restart: unless-stopped
+    networks:
+      - hpcl-network
+
+networks:
+  hpcl-network:
+    driver: bridge
