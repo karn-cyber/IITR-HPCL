@@ -18,7 +18,7 @@ import sys
 from config import SOURCES
 
 # Import utilities
-from utils.database import Database
+from backend.app.models.database import DatabaseExtended as Database
 from utils.compliance import ComplianceChecker
 
 # Import scrapers

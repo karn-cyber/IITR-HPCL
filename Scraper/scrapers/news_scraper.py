@@ -7,13 +7,19 @@ import feedparser
 from bs4 import BeautifulSoup
 from datetime import datetime
 import re
+import json
 from config import FUEL_KEYWORDS, OPERATIONAL_KEYWORDS
 from utils.company_extractor import CompanyExtractor
+from backend.app.services.entity_resolution import EntityResolutionService
+from backend.app.services.product_inference import ProductInferenceService
+from backend.app.services.scoring_engine import ScoringEngine
+from backend.app.services.notification_service import NotificationService
 
 class NewsScraper:
     def __init__(self, db, compliance_checker):
         self.db = db
         self.checker = compliance_checker
+        self.notifier = NotificationService()
         print("✅ News scraper initialized")
     
     def is_relevant(self, text):
@@ -48,6 +54,73 @@ class NewsScraper:
                 return company
         
         return "Unknown Company"
+
+    def process_lead(self, company_name, signal_text, source_name, source_url, signal_type='news', industry=None):
+        """Process and save lead with intelligence services"""
+        # 1. Resolve Company
+        company_id = EntityResolutionService.resolve_company(
+            self.db,
+            name=company_name,
+            industry=industry or 'Corporate'
+        )
+        
+        # 2. Infer Products
+        products = ProductInferenceService.infer_products(signal_text)
+        product_codes = [p['code'] for p in products] if products else []
+        
+        # 3. Calculate Score
+        scraped_at = datetime.now().isoformat()
+        score_data = ScoringEngine.calculate_score(
+            signal_type=signal_type,
+            scraped_at=scraped_at,
+            signal_text=signal_text,
+            location=None
+        )
+        
+        # 4. Insert Lead
+        lead_id = self.db.insert_lead(
+            company_id=company_id,
+            signal_text=signal_text,
+            signal_type=signal_type,
+            source_name=source_name,
+            source_url=source_url,
+            products=product_codes,
+            confidence=score_data['final_score']
+        )
+        
+        # 5. Update scoring
+        try:
+            conn = self.db.get_connection()
+            c = conn.cursor()
+            c.execute("UPDATE leads SET scoring = ? WHERE id = ?", 
+                     (json.dumps(score_data), lead_id))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"   ⚠️ Could not save scoring breakdown: {e}")
+            
+        # 6. Send Notifications (High Confidence Only)
+        if score_data['final_score'] >= 0.7:
+             # Get users to notify
+            try:
+                users = self.db.get_notification_users({'territory': 'All'})
+                
+                for user in users:
+                    if user.get('phone'):
+                        self.notifier.send_whatsapp_alert(
+                            lead={
+                                'company_name': company_name,
+                                'confidence': f"{score_data['final_score']:.2f}",
+                                'signal_type': signal_type
+                            },
+                            user_phone=user['phone']
+                        )
+            except AttributeError:
+                 print("   ⚠️  Database notification method missing")
+            except Exception as e:
+                 print(f"   ⚠️  Notification failed: {e}")
+            
+        return lead_id, products
     
     def scrape_rss(self, source):
         """Scrape RSS feed"""
@@ -77,24 +150,20 @@ class NewsScraper:
                 full_text = f"{title} {description}"
                 if self.is_relevant(full_text):
                     # Extract company name
-                    company_name = self.extract_company_name(full_text)
+                    company_name = self.extract_company_name(title, description)
                     
-                    company_id = self.db.insert_company(
-                        name=company_name,
-                        industry='Corporate'
-                    )
-                    
-                    self.db.insert_lead(
-                        company_id=company_id,
+                    # Process Lead
+                    lead_id, products = self.process_lead(
+                        company_name=company_name,
                         signal_text=f"{title}\n\n{description}",
-                        signal_type='news',
                         source_name=source['name'],
                         source_url=entry.get('link', source['url']),
-                        confidence=0.65
+                        signal_type='news'
                     )
                     
                     items_found += 1
-                    print(f"   ✅ Found: {title[:70]}...")
+                    prod_str = ", ".join([p['name'] for p in products]) if products else "General Interest"
+                    print(f"   ✅ Found: {company_name} - {prod_str}")
             
             self.db.log_scrape(
                 source_name=source['name'],
@@ -176,28 +245,27 @@ class NewsScraper:
                     # Get industry from article  content
                     industry = CompanyExtractor.get_industry_from_text(full_text)
                     
-                    company_id = self.db.insert_company(
-                        name=company_name,
-                        industry=industry
-                    )
-                    
                     # Create rich signal text
                     signal_text = f"{title}\n\n{description}"
                     if content and content != description:
-                        signal_text += f"\n\n{content}"
+                        # Clean content (remove [chars])
+                        content_clean = re.sub(r'\[\+\d+\schars\]', '', content)
+                        signal_text += f"\n\n{content_clean}"
                     signal_text += f"\n\nSource: {source_name_article}"
                     
-                    self.db.insert_lead(
-                        company_id=company_id,
+                    # Process Lead
+                    lead_id, products = self.process_lead(
+                        company_name=company_name,
                         signal_text=signal_text,
-                        signal_type='news',
                         source_name=f"NewsAPI - {source_name_article}",
                         source_url=article.get('url', ''),
-                        confidence=0.70  # Higher confidence for verified news sources
+                        signal_type='news',
+                        industry=industry
                     )
                     
                     items_found += 1
-                    print(f"   ✅ {source_name_article}: {title[:60]}...")
+                    prod_str = ", ".join([p['name'] for p in products]) if products else "General Interest"
+                    print(f"   ✅ {source_name_article}: {company_name} - {prod_str}")
             
             self.db.log_scrape(
                 source_name=source['name'],
@@ -336,19 +404,19 @@ class NewsScraper:
                 # Check relevance
                 if self.is_relevant(title):
                     company_name = self.extract_company_name(title, '')
-                    company_id = self.db.insert_company(company_name)
                     
-                    self.db.insert_lead(
-                        company_id=company_id,
+                    # Process Lead
+                    lead_id, products = self.process_lead(
+                        company_name=company_name,
                         signal_text=title,
-                        signal_type='news',
                         source_name=source['name'],
                         source_url=link,
-                        confidence=0.5
+                        signal_type='news'
                     )
                     
                     items_found += 1
-                    print(f"   ✅ Relevant: {title[:70]}...")
+                    prod_str = ", ".join([p['name'] for p in products]) if products else "General Interest"
+                    print(f"   ✅ Relevant: {title[:70]}... ({prod_str})")
             
             self.db.log_scrape(
                 source_name=source['name'],

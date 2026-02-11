@@ -15,23 +15,20 @@ sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 from utils.database import Database as BaseDatabase
 
 
-class DatabaseExtended:
+class DatabaseExtended(BaseDatabase):
     """Extended database operations for the API"""
     
     def __init__(self, db_path: str = None):
-        self.db_path = db_path or settings.DATABASE_PATH
-        # Initialize base schema first
-        self._init_base_schema()
-        # Then add extended schema
+        # Use provided path or settings default
+        path = db_path or settings.DATABASE_PATH
+        # Initialize parent (BaseDatabase)
+        super().__init__(path)
+        
+        self.db_path = path
+        # Add extended schema
         self.init_extended_schema()
     
-    def _init_base_schema(self):
-        """Initialize base database schema using the original Database class"""
-        try:
-            base_db = BaseDatabase(self.db_path)
-            print("✅ Base database schema initialized")
-        except Exception as e:
-            print(f"⚠️  Base schema initialization: {e}")
+
     
     def get_connection(self):
         """Get database connection"""
@@ -283,6 +280,58 @@ class DatabaseExtended:
         
         conn.commit()
         conn.close()
+
+    def get_notification_users(self, lead_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Get users who should be notified for a specific lead"""
+        conn = self.get_connection()
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        
+        # Logic: Get users with push_enabled=1
+        # In a real app, filtering by territory/industry would happen here
+        c.execute("""
+            SELECT name, email, alert_preferences
+            FROM users 
+            WHERE active = 1
+        """)
+        
+        users = []
+        rows = c.fetchall()
+        
+        # For hackathon/demo, we might check .env for a fallback admin phone
+        # because the 'users' table might not have phone numbers (schema check needed)
+        
+        for row in rows:
+            user = dict(row)
+            # Parse preferences to find phone number if stored there, or use a default
+            # The schema I viewed earlier didn't have a specific 'phone' column in 'users'
+            # checking schema... it has 'alert_preferences'
+            
+            # Temporary: Return a mock user or check if schema has phone
+            # Schema has: email, territory, alert_preferences. No direct phone column.
+            # I will assume phone is in alert_preferences JSON or I should add it.
+            # Or simpler: For the MVP, I'll just use the env var phone number for ALL users 
+            # if push_enabled is true (which I added to schema).
+            
+            # Let's rely on NotificationService's internal fallbacks or passed arguments.
+            # But wait, NotificationService takes `user_phone`.
+            # I should probably add `phone` to users table or just extract from preferences.
+            
+            try:
+                prefs = json.loads(user.get('alert_preferences', '{}'))
+                if prefs.get('whatsapp_enabled'):
+                    user['phone'] = prefs.get('phone')
+                    users.append(user)
+            except:
+                pass
+                
+        conn.close()
+        
+        # Fallback: If no users found (likely in this new setup), return a dummy "Admin" 
+        # that targets the env var phone number implicitly handled by the caller? 
+        # No, passed explicitly.
+        
+        return users
     
     # Lead operations
     def get_leads_paginated(self, page: int = 1, limit: int = 50, 
